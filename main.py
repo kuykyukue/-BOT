@@ -1,13 +1,14 @@
 import os
+import json
 import discord
+from discord import app_commands
 from discord.ext import commands
 from googletrans import Translator
 from flask import Flask
 from threading import Thread
-import json
 
 # -------------------------------
-# Flask（Renderがポートを監視する用）
+# Flask（RenderのWebサーバー監視用）
 # -------------------------------
 app = Flask(__name__)
 
@@ -16,8 +17,8 @@ def home():
     return "✅ Discord Translation Bot is running on Render (Free Plan)."
 
 def run_web():
-    port = int(os.getenv("PORT", 10000))  # Renderが自動で割り当てるポート
-    app.run(host='0.0.0.0', port=port)
+    port = int(os.getenv("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
 
 Thread(target=run_web).start()
 
@@ -25,14 +26,15 @@ Thread(target=run_web).start()
 # Discord Bot 設定
 # -------------------------------
 TOKEN = os.getenv("DISCORD_TOKEN")
+
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
-
 translator = Translator()
+
 settings_file = "channel_settings.json"
 
 # -------------------------------
-# 言語設定ファイル
+# 言語設定ファイル操作
 # -------------------------------
 def load_settings():
     if os.path.exists(settings_file):
@@ -47,7 +49,7 @@ def save_settings(data):
 channel_languages = load_settings()
 
 # -------------------------------
-# 国旗対応表
+# 国旗と言語の対応表
 # -------------------------------
 flag_to_lang = {
     "🇯🇵": "ja", "🇺🇸": "en", "🇫🇷": "fr",
@@ -57,37 +59,51 @@ flag_to_lang = {
 lang_to_flag = {v: k for k, v in flag_to_lang.items()}
 
 # -------------------------------
-# 起動時
+# 起動時イベント
 # -------------------------------
 @bot.event
 async def on_ready():
     print(f"✅ Bot logged in as {bot.user}")
+    try:
+        synced = await bot.tree.sync()
+        print(f"🌐 Synced {len(synced)} slash commands.")
+    except Exception as e:
+        print(f"⚠️ スラッシュコマンド同期エラー: {e}")
 
 # -------------------------------
-# 翻訳言語設定コマンド
+# スラッシュコマンド
 # -------------------------------
-@bot.command()
-async def setlang(ctx, flag: str):
-    """使用例: !setlang 🇺🇸"""
+
+@bot.tree.command(name="setlang", description="このチャンネルの翻訳先言語を設定します（例: /setlang 🇯🇵）")
+async def setlang(interaction: discord.Interaction, flag: str):
     if flag not in flag_to_lang:
-        await ctx.send("⚙️ 対応言語: " + " ".join(flag_to_lang.keys()))
+        await interaction.response.send_message(
+            "⚙️ 対応言語: " + " ".join(flag_to_lang.keys()),
+            ephemeral=True
+        )
         return
-    lang = flag_to_lang[flag]
-    channel_languages[str(ctx.channel.id)] = lang
-    save_settings(channel_languages)
-    await ctx.send(f"✅ 翻訳先を {flag} に設定しました！")
 
-@bot.command()
-async def langinfo(ctx):
-    lang = channel_languages.get(str(ctx.channel.id))
+    lang = flag_to_lang[flag]
+    channel_languages[str(interaction.channel.id)] = lang
+    save_settings(channel_languages)
+
+    await interaction.response.send_message(f"✅ このチャンネルの翻訳先を {flag} に設定しました！")
+
+@bot.tree.command(name="langinfo", description="このチャンネルの翻訳設定を確認します")
+async def langinfo(interaction: discord.Interaction):
+    lang = channel_languages.get(str(interaction.channel.id))
     if not lang:
-        await ctx.send("⚙️ このチャンネルは未設定です。`!setlang 🇺🇸` などで設定してください。")
+        await interaction.response.send_message(
+            "⚙️ このチャンネルは未設定です。`/setlang 🇺🇸` などで設定してください。",
+            ephemeral=True
+        )
         return
+
     flag = lang_to_flag.get(lang, "🌍")
-    await ctx.send(f"🌍 現在の翻訳先: {flag}（{lang}）")
+    await interaction.response.send_message(f"🌍 現在の翻訳先: {flag}（{lang}）")
 
 # -------------------------------
-# 翻訳イベント
+# メッセージ翻訳イベント
 # -------------------------------
 @bot.event
 async def on_message(message):
