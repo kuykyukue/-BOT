@@ -1,88 +1,127 @@
+# ================================
+# 🌐 Discord翻訳BOT 完全版 (Render対応)
+# ================================
 import discord
 from discord import app_commands
 from discord.ext import commands
 from googletrans import Translator
 import json
 import os
+from flask import Flask
+from threading import Thread
 
-# 翻訳設定ファイル
-SETTINGS_FILE = "translation_settings.json"
+# ======================
+# 🔧 Flask (Render対応)
+# ======================
+app = Flask('')
 
-# 設定を読み込み
-if os.path.exists(SETTINGS_FILE):
-    with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-        settings = json.load(f)
-else:
-    settings = {}
+@app.route('/')
+def home():
+    return "Bot is alive!"
 
-# Bot設定
+def run():
+    app.run(host='0.0.0.0', port=8080)
+
+Thread(target=run).start()
+
+# ======================
+# ⚙️ Discord Bot設定
+# ======================
 intents = discord.Intents.default()
-intents.messages = True
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
+
 translator = Translator()
+SETTINGS_FILE = "settings.json"
 
-# 翻訳ON/OFF 切り替えコマンド
-@bot.tree.command(name="toggletranslate", description="翻訳機能をON/OFFします。")
-async def toggle_translate(interaction: discord.Interaction):
-    guild_id = str(interaction.guild_id)
-    settings.setdefault(guild_id, {"enabled": True, "from": "ja", "to": "en"})
+# ======================
+# 💾 設定の保存・読込
+# ======================
+def load_settings():
+    if os.path.exists(SETTINGS_FILE):
+        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
 
-    settings[guild_id]["enabled"] = not settings[guild_id]["enabled"]
-
+def save_settings(data):
     with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-        json.dump(settings, f, ensure_ascii=False, indent=2)
+        json.dump(data, f, indent=4, ensure_ascii=False)
 
-    status = "✅ ON（翻訳有効）" if settings[guild_id]["enabled"] else "❌ OFF（翻訳停止）"
-    await interaction.response.send_message(f"翻訳機能を切り替えました: {status}", ephemeral=True)
+settings = load_settings()
 
-# 言語設定コマンド
-@bot.tree.command(name="setlang", description="翻訳元言語と翻訳先言語を設定します。例: /setlang ja en")
-@app_commands.describe(from_lang="翻訳元の言語コード", to_lang="翻訳先の言語コード")
-async def set_language(interaction: discord.Interaction, from_lang: str, to_lang: str):
+# ======================
+# 🚀 起動イベント
+# ======================
+@bot.event
+async def on_ready():
+    print(f"✅ ログイン完了: {bot.user}")
+    try:
+        synced = await bot.tree.sync()
+        print(f"🧩 スラッシュコマンド {len(synced)} 件を同期しました。")
+    except Exception as e:
+        print(f"⚠️ コマンド同期エラー: {e}")
+
+# ======================
+# 🌍 /setlang コマンド
+# ======================
+@bot.tree.command(name="setlang", description="翻訳先の言語を設定します（例: /setlang ja en）")
+@app_commands.describe(source="元の言語コード", target="翻訳先の言語コード")
+async def setlang(interaction: discord.Interaction, source: str, target: str):
     guild_id = str(interaction.guild_id)
-    settings.setdefault(guild_id, {"enabled": True})
-    settings[guild_id]["from"] = from_lang
-    settings[guild_id]["to"] = to_lang
-
-    with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-        json.dump(settings, f, ensure_ascii=False, indent=2)
-
+    settings[guild_id] = settings.get(guild_id, {})
+    settings[guild_id]["source"] = source
+    settings[guild_id]["target"] = target
+    save_settings(settings)
     await interaction.response.send_message(
-        f"🌍 翻訳言語を設定しました。\n　入力言語: `{from_lang}` → 出力言語: `{to_lang}`", ephemeral=True
+        f"✅ 翻訳言語を設定しました。\n"
+        f"🌐 {source} → {target}"
     )
 
-# メッセージ監視・翻訳処理
+# ======================
+# 🔘 /toggletranslate コマンド
+# ======================
+@bot.tree.command(name="toggletranslate", description="翻訳機能のON/OFFを切り替えます。")
+async def toggletranslate(interaction: discord.Interaction):
+    guild_id = str(interaction.guild_id)
+    settings[guild_id] = settings.get(guild_id, {})
+    current = settings[guild_id].get("enabled", True)
+    settings[guild_id]["enabled"] = not current
+    save_settings(settings)
+    status = "ON 🔊" if not current else "OFF 🔇"
+    await interaction.response.send_message(f"翻訳機能を {status} にしました。")
+
+# ======================
+# 💬 メッセージ翻訳
+# ======================
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
 
     guild_id = str(message.guild.id)
-    guild_settings = settings.get(guild_id)
+    config = settings.get(guild_id, {})
 
-    if guild_settings and guild_settings.get("enabled", True):
-        src = guild_settings.get("from", "ja")
-        dest = guild_settings.get("to", "en")
+    # 翻訳がOFFならスキップ
+    if not config.get("enabled", True):
+        return
 
-        try:
-            result = translator.translate(message.content, src=src, dest=dest)
-            # 絵文字を保持したまま翻訳文を表示
-            await message.channel.send(
-                f"💬 **翻訳 ({src} → {dest})**\n{result.text}"
-            )
-        except Exception as e:
-            await message.channel.send(f"⚠️ 翻訳エラー: {e}")
+    source = config.get("source", "auto")
+    target = config.get("target", "en")
 
-# 起動時
-@bot.event
-async def on_ready():
     try:
-        synced = await bot.tree.sync()
-        print(f"✅ スラッシュコマンドを同期しました ({len(synced)} 個)")
+        translated = translator.translate(message.content, src=source, dest=target)
+        if translated.text != message.content:
+            await message.channel.send(
+                f"💬 **{message.author.display_name}** ({source}→{target}):\n{translated.text}"
+            )
     except Exception as e:
-        print(f"❌ スラッシュコマンド同期エラー: {e}")
-    print(f"🤖 ログイン完了: {bot.user}")
+        print(f"⚠️ 翻訳エラー: {e}")
 
-# Bot起動
-bot.run(os.environ["DISCORD_TOKEN"])
+# ======================
+# 🚀 Bot起動
+# ======================
+TOKEN = os.getenv("DISCORD_TOKEN")
+if not TOKEN:
+    print("❌ 環境変数 DISCORD_TOKEN が設定されていません。RenderのEnvironmentに追加してください。")
+else:
+    bot.run(TOKEN)
