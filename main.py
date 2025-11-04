@@ -23,7 +23,7 @@ def keep_alive():
     t.start()
 
 # --- Discord Bot 設定 ---
-TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
+TOKEN = os.environ.get("DISCORD_TOKEN")  # ← Renderの環境変数名に合わせました
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -97,16 +97,19 @@ async def status(interaction: discord.Interaction):
 @bot.event
 async def on_message(message):
     if message.author.bot:
-        return
+        return  # ✅ Bot自身の発言を無視（翻訳の重複防止）
+
     guild_id = message.guild.id
 
     # 自動翻訳ONでない場合
     if not auto_translate_guilds.get(guild_id, False):
+        await bot.process_commands(message)
         return
 
     # チャンネル制限ありの場合
     allowed_channels = channel_whitelist.get(guild_id, set())
     if allowed_channels and message.channel.id not in allowed_channels:
+        await bot.process_commands(message)
         return
 
     target_langs = user_languages.get(guild_id, ["en", "ja"])
@@ -120,6 +123,9 @@ async def on_message(message):
                 await message.channel.send(f"{flag} {translated}")
     except Exception as e:
         await message.channel.send(f"⚠️ 翻訳エラー: {e}")
+
+    # ✅ スラッシュコマンドが動作するようにする
+    await bot.process_commands(message)
 
 # --- 起動イベント ---
 @bot.event
