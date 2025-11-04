@@ -5,8 +5,10 @@ from threading import Thread
 from deep_translator import GoogleTranslator
 import os
 
+# ---- Discord Bot基本設定 ----
 intents = discord.Intents.default()
 intents.messages = True
+intents.message_content = True  # 🔹 メッセージ内容取得を許可
 bot = commands.Bot(command_prefix="/", intents=intents)
 
 # ---- Flask (Render用 keep-alive) ----
@@ -21,9 +23,19 @@ def run_web():
 
 Thread(target=run_web).start()
 
-# ---- 翻訳ON/OFF管理 ----
+# ===============================
+# 自動翻訳 ON/OFF & 多言語設定
+# ===============================
 auto_translate_channels = set()
+target_languages = ["en", "ja", "ko"]  # ← 翻訳先をここで指定
+flags = {"en": "🇺🇸", "ja": "🇯🇵", "ko": "🇰🇷"}
 
+# 翻訳メッセージ対応表（削除連動用）
+translated_message_map = {}  # {元メッセージID: [翻訳メッセージID,...]}
+
+# ===============================
+# /auto コマンド（ON/OFF切替）
+# ===============================
 @bot.command()
 async def auto(ctx):
     """自動翻訳ON/OFF切り替え"""
@@ -34,21 +46,14 @@ async def auto(ctx):
         auto_translate_channels.add(ctx.channel.id)
         await ctx.send("✅ 自動翻訳をオンにしました。")
 
+# ===============================
+# メッセージ受信 → 翻訳
+# ===============================
 @bot.event
 async def on_message(message):
     if message.author.bot:
-        return  # ← これが重複翻訳防止の最重要ポイント！
+        return  # 🔸 Bot自身のメッセージは無視（重複防止）
 
-    if message.channel.id in auto_translate_channels:
-        text = message.content
-        try:
-            translated = GoogleTranslator(source='auto', target='en').translate(text)
-            flag = "🇺🇸"
-            await message.channel.send(f"{flag} {translated}")
-        except Exception as e:
-            await message.channel.send(f"翻訳エラー: {e}")
+    if message.channel.id i
 
-    await bot.process_commands(message)
-
-# ---- Bot起動 ----
 bot.run(os.environ["DISCORD_TOKEN"])
