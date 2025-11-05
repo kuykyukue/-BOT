@@ -89,7 +89,7 @@ async def on_message(message):
             translated = GoogleTranslator(source='auto', target=lang).translate(text)
             if translated and translated != text:
                 flag = flags.get(lang, f"[{lang}]")
-                sent = await message.channel.send(f"{flag} {translated}")
+                await message.channel.send(f"{flag} {translated}")
                 translated_ids.append(sent.id)
         except Exception as e:
             await message.channel.send(f"⚠️ 翻訳エラー: {e}")
