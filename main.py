@@ -95,4 +95,4 @@ async def on_ready():
         print(f"❌ Command sync failed: {e}")
 
 # ---- Bot起動 ----
-bot.run(os.environ["DISCORD_TOKEN"])
+bot.run(os.environ["DISCORD_BOT_TOKEN"])
