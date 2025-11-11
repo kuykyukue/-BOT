@@ -3,11 +3,11 @@ import json
 import discord
 from discord import app_commands
 from discord.ext import commands
-from googletrans import Translator
+from deep_translator import GoogleTranslator
 from dotenv import load_dotenv
 
 # -----------------------------
-# 環境変数からトークン取得
+# 環境変数
 # -----------------------------
 load_dotenv()
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
@@ -17,7 +17,6 @@ TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 # -----------------------------
 intents = discord.Intents.default()
 client = commands.Bot(command_prefix="!", intents=intents)
-translator = Translator()
 
 # -----------------------------
 # 国旗＋言語名
@@ -25,7 +24,7 @@ translator = Translator()
 LANG_FLAGS = {
     "en": "🇺🇸 英語",
     "ja": "🇯🇵 日本語",
-    "zh-cn": "🇨🇳 中国語（簡体字）",
+    "zh": "🇨🇳 中国語（簡体字）",
     "ko": "🇰🇷 韓国語",
     "es": "🇪🇸 スペイン語",
     "fr": "🇫🇷 フランス語",
@@ -40,7 +39,7 @@ LANG_FLAGS = {
 }
 
 # -----------------------------
-# 翻訳設定管理
+# 設定管理
 # -----------------------------
 SETTINGS_FILE = "languages.json"
 
@@ -62,7 +61,7 @@ channel_languages = load_languages()
 @client.tree.command(name="setlang", description="翻訳設定を管理します（ON/OFF/変更/確認）")
 @app_commands.describe(
     mode="翻訳モード（on/off/show）を指定してください",
-    language="翻訳先の言語コード（例: en, ja, zh-cn など）"
+    language="翻訳先の言語コード（例: en, ja, zh, fr など）"
 )
 @app_commands.choices(
     mode=[
@@ -71,11 +70,7 @@ channel_languages = load_languages()
         app_commands.Choice(name="ℹ️ 設定確認", value="show")
     ]
 )
-async def setlang(
-    interaction: discord.Interaction,
-    mode: app_commands.Choice[str],
-    language: str = None
-):
+async def setlang(interaction: discord.Interaction, mode: app_commands.Choice[str], language: str = None):
     channel_id = str(interaction.channel.id)
 
     try:
@@ -131,18 +126,21 @@ async def on_message(message):
     lang = settings.get("lang", "en")
 
     try:
-        translated = translator.translate(message.content, dest=lang)
-        # 元言語 = 翻訳先ならスキップ
-        if translated.src.lower() == lang.lower():
+        # Deep-translatorで翻訳
+        translated_text = GoogleTranslator(source='auto', target=lang).translate(message.content)
+
+        # 元言語と翻訳先が同じならスキップ
+        detected_src = GoogleTranslator(source='auto', target='en').translate(message.content)
+        if detected_src.lower() == message.content.lower():  # 元言語=翻訳先の簡易判定
             return
 
         lang_label = LANG_FLAGS.get(lang, lang)
         embed = discord.Embed(
             title=f"🌐 翻訳結果 [{lang_label}]",
-            description=translated.text,
+            description=translated_text,
             color=0x1E90FF
         )
-        embed.set_footer(text=f"翻訳元: {translated.src}")
+        embed.set_footer(text="翻訳元: 自動判定")
         await message.channel.send(embed=embed)
 
     except Exception as e:
