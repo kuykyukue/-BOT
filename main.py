@@ -1,157 +1,155 @@
-import os
-import json
 import discord
-from discord import app_commands
 from discord.ext import commands
+from flask import Flask
+from threading import Thread
 from deep_translator import GoogleTranslator
-from dotenv import load_dotenv
+import json
+import os
 
-# -----------------------------
-# 環境変数
-# -----------------------------
-load_dotenv()
-TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-
-# -----------------------------
-# Bot初期化
-# -----------------------------
+# ===============================
+# Discord Bot 設定
+# ===============================
 intents = discord.Intents.default()
-client = commands.Bot(command_prefix="!", intents=intents)
+intents.messages = True
+intents.message_content = True
+bot = commands.Bot(command_prefix="/", intents=intents)
 
-# -----------------------------
-# 国旗＋言語名
-# -----------------------------
-LANG_FLAGS = {
-    "en": "🇺🇸 英語",
-    "ja": "🇯🇵 日本語",
-    "zh": "🇨🇳 中国語（簡体字）",
-    "ko": "🇰🇷 韓国語",
-    "es": "🇪🇸 スペイン語",
-    "fr": "🇫🇷 フランス語",
-    "de": "🇩🇪 ドイツ語",
-    "ru": "🇷🇺 ロシア語",
-    "it": "🇮🇹 イタリア語",
-    "pt": "🇵🇹 ポルトガル語",
-    "vi": "🇻🇳 ベトナム語",
-    "id": "🇮🇩 インドネシア語",
-    "th": "🇹🇭 タイ語",
-    "ar": "🇸🇦 アラビア語",
-}
+# ===============================
+# Flask (Render keep-alive)
+# ===============================
+app = Flask(__name__)
 
-# -----------------------------
-# 設定管理
-# -----------------------------
-SETTINGS_FILE = "languages.json"
+@app.route('/')
+def home():
+    return "Bot is running!"
 
-def load_languages():
+def run_web():
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
+
+Thread(target=run_web).start()
+
+# ===============================
+# 翻訳設定関連
+# ===============================
+SETTINGS_FILE = "channel_settings.json"
+
+def load_settings():
+    """JSONファイルから設定を読み込む"""
     if os.path.exists(SETTINGS_FILE):
         with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     return {}
 
-def save_languages():
+def save_settings():
+    """設定をJSONファイルに保存"""
     with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-        json.dump(channel_languages, f, ensure_ascii=False, indent=2)
+        json.dump(channel_settings, f, ensure_ascii=False, indent=2)
 
-channel_languages = load_languages()
+# チャンネル設定：{ channel_id: {"enabled": bool, "lang": "xx"} }
+channel_settings = load_settings()
 
-# -----------------------------
+supported_langs = {
+    "en": "英語 🇺🇸",
+    "ja": "日本語 🇯🇵",
+    "ko": "韓国語 🇰🇷",
+    "zh": "中国語 🇨🇳",
+    "fr": "フランス語 🇫🇷",
+    "de": "ドイツ語 🇩🇪",
+    "vi": "ベトナム語 🇻🇳",
+    "es": "スペイン語 🇪🇸"
+}
+
+# ===============================
+# /auto コマンド（ON/OFF切替）
+# ===============================
+@bot.command()
+async def auto(ctx):
+    """このチャンネルで自動翻訳をON/OFF"""
+    cid = str(ctx.channel.id)
+    setting = channel_settings.get(cid, {"enabled": False, "lang": "en"})
+
+    setting["enabled"] = not setting["enabled"]
+    channel_settings[cid] = setting
+    save_settings()
+
+    status = "✅ 翻訳ON" if setting["enabled"] else "❌ 翻訳OFF"
+    await ctx.send(f"{status} に設定しました。")
+
+# ===============================
 # /setlang コマンド
-# -----------------------------
-@client.tree.command(name="setlang", description="翻訳設定を管理します（ON/OFF/変更/確認）")
-@app_commands.describe(
-    mode="翻訳モード（on/off/show）を指定してください",
-    language="翻訳先の言語コード（例: en, ja, zh, fr など）"
-)
-@app_commands.choices(
-    mode=[
-        app_commands.Choice(name="🟢 翻訳ON", value="on"),
-        app_commands.Choice(name="🔴 翻訳OFF", value="off"),
-        app_commands.Choice(name="ℹ️ 設定確認", value="show")
-    ]
-)
-async def setlang(interaction: discord.Interaction, mode: app_commands.Choice[str], language: str = None):
-    channel_id = str(interaction.channel.id)
+# ===============================
+@bot.command()
+async def setlang(ctx, lang: str = None):
+    """翻訳先の言語を設定（引数なしで一覧表示）"""
+    cid = str(ctx.channel.id)
+    if lang is None:
+        lang_list = "\n".join([f"`{k}` → {v}" for k, v in supported_langs.items()])
+        await ctx.send(f"🌐 使用可能な言語一覧:\n{lang_list}\n\n例: `/setlang en`")
+        return
 
-    try:
-        if mode.value == "on":
-            if not language:
-                await interaction.response.send_message("⚠️ 言語コードを指定してください（例: `/setlang on en`）")
-                return
+    lang = lang.lower()
+    if lang not in supported_langs:
+        await ctx.send("❌ 無効な言語コードです。 `/setlang` で一覧を確認できます。")
+        return
 
-            channel_languages[channel_id] = {"enabled": True, "lang": language.lower()}
-            save_languages()
-            lang_label = LANG_FLAGS.get(language.lower(), language.upper())
-            await interaction.response.send_message(f"✅ 自動翻訳を有効化しました（{lang_label}）")
+    setting = channel_settings.get(cid, {"enabled": False, "lang": "en"})
+    setting["lang"] = lang
+    channel_settings[cid] = setting
+    save_settings()
 
-        elif mode.value == "off":
-            if channel_id in channel_languages:
-                channel_languages[channel_id]["enabled"] = False
-                save_languages()
-                await interaction.response.send_message("🛑 自動翻訳を無効化しました。")
-            else:
-                await interaction.response.send_message("⚠️ すでに翻訳は無効です。")
+    await ctx.send(f"🌍 翻訳先を {supported_langs[lang]} に設定しました。")
 
-        elif mode.value == "show":
-            if channel_id in channel_languages:
-                data = channel_languages[channel_id]
-                status = "🟢 有効" if data.get("enabled") else "🔴 無効"
-                lang = data.get("lang", "未設定")
-                lang_label = LANG_FLAGS.get(lang, lang.upper())
-                await interaction.response.send_message(
-                    f"📊 現在の設定：\n状態：{status}\n翻訳先：{lang_label}"
-                )
-            else:
-                await interaction.response.send_message("ℹ️ このチャンネルでは翻訳設定がまだありません。")
+# ===============================
+# /status コマンド（確認用）
+# ===============================
+@bot.command()
+async def status(ctx):
+    """このチャンネルの翻訳設定を確認"""
+    cid = str(ctx.channel.id)
+    setting = channel_settings.get(cid, {"enabled": False, "lang": "en"})
+    lang_display = supported_langs.get(setting["lang"], "不明")
+    status = "ON ✅" if setting["enabled"] else "OFF ❌"
+    await ctx.send(f"📋 このチャンネルの設定\n- 翻訳: {status}\n- 言語: {lang_display}")
 
-    except Exception as e:
-        await interaction.response.send_message(f"⚠️ エラー：\n```\n{e}\n```")
-
-# -----------------------------
-# 自動翻訳イベント
-# -----------------------------
-@client.event
+# ===============================
+# メッセージ受信時
+# ===============================
+@bot.event
 async def on_message(message):
-    if message.author.bot or message.embeds:
-        return  # Bot自身や翻訳済みEmbedは無視
-
-    channel_id = str(message.channel.id)
-    if channel_id not in channel_languages:
-        return
-
-    settings = channel_languages[channel_id]
-    if not settings.get("enabled"):
-        return
-
-    lang = settings.get("lang", "en")
-
     try:
-        # Deep-translatorで翻訳
-        translated_text = GoogleTranslator(source='auto', target=lang).translate(message.content)
-
-        # 元言語と翻訳先が同じならスキップ
-        detected_src = GoogleTranslator(source='auto', target='en').translate(message.content)
-        if detected_src.lower() == message.content.lower():  # 元言語=翻訳先の簡易判定
+        if message.author.bot or message.author == message.guild.me:
             return
 
-        lang_label = LANG_FLAGS.get(lang, lang)
-        embed = discord.Embed(
-            title=f"🌐 翻訳結果 [{lang_label}]",
-            description=translated_text,
-            color=0x1E90FF
-        )
-        embed.set_footer(text="翻訳元: 自動判定")
-        await message.channel.send(embed=embed)
+        cid = str(message.channel.id)
+        setting = channel_settings.get(cid)
+        if not setting or not setting.get("enabled"):
+            await bot.process_commands(message)
+            return
+
+        target_lang = setting.get("lang", "en")
+        translated = GoogleTranslator(source="auto", target=target_lang).translate(message.content)
+        flag = supported_langs.get(target_lang, "🌐")
+
+        await message.channel.send(f"{flag.split()[1]} {translated}")
 
     except Exception as e:
-        await message.channel.send(f"⚠️ 翻訳中にエラーが発生しました：{e}")
+        await message.channel.send(f"⚠️ 翻訳時にエラーが発生しました: {e}")
 
-# -----------------------------
-# 起動
-# -----------------------------
-@client.event
+    await bot.process_commands(message)
+
+# ===============================
+# 起動時
+# ===============================
+@bot.event
 async def on_ready():
-    await client.tree.sync()
-    print(f"✅ ログイン完了: {client.user}")
+    print(f"✅ {bot.user} としてログインしました！")
+    print(f"💾 {len(channel_settings)} 件のチャンネル設定を読み込みました。")
 
-client.run(TOKEN)
+# ===============================
+# 起動
+# ===============================
+try:
+    bot.run(os.environ["DISCORD_BOT_TOKEN"])
+except Exception as e:
+    print(f"❌ BOT起動エラー: {e}")
