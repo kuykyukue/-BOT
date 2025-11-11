@@ -51,17 +51,23 @@ supported_languages = {
     "ja": "🇯🇵 Japanese",
     "ko": "🇰🇷 Korean",
     "vi": "🇻🇳 Vietnamese",
-    "es": "🇪🇸 Spanish"
+    "es": "🇪🇸 Spanish",
+    "fr": "🇫🇷 French",
+    "de": "🇩🇪 German",
+    "zh": "🇨🇳 Chinese"
 }
 
 flag_only = {k: v.split()[0] for k, v in supported_languages.items()}
 
 # ===============================
-# /setlang コマンド（複数選択対応）
+# /setlang コマンド（複数選択リスト対応）
 # ===============================
 @tree.command(name="setlang", description="翻訳先の言語を設定します（複数選択可）")
 async def setlang(interaction: discord.Interaction):
-    options = [discord.SelectOption(label=v, value=k) for k, v in supported_languages.items()]
+    options = [
+        discord.SelectOption(label=v, value=k)
+        for k, v in supported_languages.items()
+    ]
 
     select = discord.ui.Select(
         placeholder="翻訳したい言語を選んでください（複数可）",
@@ -74,6 +80,7 @@ async def setlang(interaction: discord.Interaction):
         selected_langs = select.values
         channel_id = str(interaction.channel_id)
 
+        # 保存
         channel_settings[channel_id] = {
             "langs": selected_langs,
             "auto": channel_settings.get(channel_id, {}).get("auto", False)
@@ -81,13 +88,15 @@ async def setlang(interaction: discord.Interaction):
         save_settings()
 
         flags = " ".join(flag_only[l] for l in selected_langs)
-        await interaction2.response.edit_message(content=f"✅ 翻訳先を {flags} に設定しました！", view=None)
+        await interaction2.response.edit_message(
+            content=f"✅ 翻訳先を {flags} に設定しました！",
+            view=None
+        )
 
     select.callback = select_callback
-
     view = discord.ui.View()
     view.add_item(select)
-    await interaction.response.send_message("翻訳先の言語を選んでください👇", view=view)
+    await interaction.response.send_message("🌐 翻訳したい言語を選んでください👇", view=view)
 
 # ===============================
 # /auto コマンド（ON/OFF切替）
@@ -107,36 +116,35 @@ async def auto(interaction: discord.Interaction):
     await interaction.response.send_message(f"🌍 自動翻訳を {status} にしました！")
 
 # ===============================
-# /help コマンド（使い方説明）
+# /help コマンド（使い方）
 # ===============================
 @tree.command(name="help", description="このBotの使い方を表示します")
 async def help_command(interaction: discord.Interaction):
     embed = discord.Embed(
         title="🌐 翻訳Bot 使い方ガイド",
-        description="このBotはチャンネルごとに自動翻訳を行います。",
-        color=0x00BFFF
+        color=0x1E90FF
     )
     embed.add_field(
         name="🗣️ `/setlang`",
-        value="翻訳したい言語を **複数選択** できます。\n例：🇺🇸 English, 🇯🇵 Japanese, 🇪🇸 Spanish など",
+        value="翻訳したい言語を**複数選択リスト**から選べます。\n例：🇯🇵🇺🇸🇻🇳🇪🇸",
         inline=False
     )
     embed.add_field(
         name="🌍 `/auto`",
-        value="自動翻訳を **オン／オフ** 切り替えます。\nオンにしたチャンネルの発言のみ翻訳されます。",
+        value="現在のチャンネルの自動翻訳を**オン／オフ**切り替えます。",
         inline=False
     )
     embed.add_field(
         name="💬 翻訳動作",
-        value="・自分の発言は翻訳されません。\n・他の人のメッセージが選択した言語に翻訳されます。\n・翻訳文には国旗が付きます（例：🇯🇵 こんにちは）",
+        value="・自分の発言は翻訳されません。\n・他のユーザーの発言が選択した言語に翻訳されます。\n・翻訳文には国旗が付きます。",
         inline=False
     )
     embed.add_field(
         name="💾 設定保存",
-        value="各チャンネルごとの設定は自動で保存され、再起動後も保持されます。",
+        value="設定は自動的に保存され、再起動後も保持されます。",
         inline=False
     )
-    embed.set_footer(text="開発: ChatGPT 翻訳Bot (Render対応版)")
+    embed.set_footer(text="開発: ChatGPT翻訳Bot（Render対応版）")
     await interaction.response.send_message(embed=embed)
 
 # ===============================
@@ -145,7 +153,7 @@ async def help_command(interaction: discord.Interaction):
 @bot.event
 async def on_message(message):
     if message.author.bot:
-        return  # Bot自身や翻訳メッセージは無視
+        return  # 自分・他のBotは無視
 
     channel_id = str(message.channel.id)
     settings = channel_settings.get(channel_id, {"langs": ["en"], "auto": False})
@@ -159,7 +167,7 @@ async def on_message(message):
         try:
             translated = GoogleTranslator(source='auto', target=lang).translate(message.content)
             if translated and translated != message.content:
-                await message.channel.send(f"{flag_only[lang]} {translated}")
+                await message.channel.send(f"{flag_only.get(lang, lang)} {translated}")
         except Exception as e:
             print(f"⚠️ 翻訳エラー: {e}")
 
