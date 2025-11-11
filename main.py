@@ -27,7 +27,7 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
-# ---- 設定保存ファイル ----
+# ---- 設定ファイル ----
 SETTINGS_FILE = "channel_settings.json"
 
 def load_settings():
@@ -43,39 +43,51 @@ def save_settings():
     with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
         json.dump(channel_settings, f, ensure_ascii=False, indent=2)
 
-# ---- 初期ロード ----
 channel_settings = load_settings()
 
-# ---- サポート言語 ----
+# ---- サポート言語（国旗つき）----
 supported_languages = {
-    "en": "🇺🇸",
-    "ja": "🇯🇵",
-    "ko": "🇰🇷",
-    "vi": "🇻🇳",
-    "es": "🇪🇸"
+    "en": "🇺🇸 English",
+    "ja": "🇯🇵 Japanese",
+    "ko": "🇰🇷 Korean",
+    "vi": "🇻🇳 Vietnamese",
+    "es": "🇪🇸 Spanish"
 }
 
+flag_only = {k: v.split()[0] for k, v in supported_languages.items()}
+
 # ===============================
-# /setlang コマンド（国旗付き選択式）
+# /setlang コマンド（複数選択対応）
 # ===============================
-@tree.command(name="setlang", description="翻訳先の言語を設定します")
-@app_commands.describe(language="翻訳先の言語を選んでください")
-@app_commands.choices(language=[
-    app_commands.Choice(name=f"{flag} {code.upper()}", value=code)
-    for code, flag in supported_languages.items()
-])
-async def setlang(interaction: discord.Interaction, language: app_commands.Choice[str]):
-    channel_id = str(interaction.channel_id)
+@tree.command(name="setlang", description="翻訳先の言語を設定します（複数選択可）")
+async def setlang(interaction: discord.Interaction):
+    options = [discord.SelectOption(label=v, value=k) for k, v in supported_languages.items()]
 
-    if channel_id not in channel_settings:
-        channel_settings[channel_id] = {"lang": "en", "auto": False}
-
-    channel_settings[channel_id]["lang"] = language.value
-    save_settings()
-
-    await interaction.response.send_message(
-        f"✅ 翻訳先を {supported_languages[language.value]} に設定しました！"
+    select = discord.ui.Select(
+        placeholder="翻訳したい言語を選んでください（複数可）",
+        min_values=1,
+        max_values=len(options),
+        options=options
     )
+
+    async def select_callback(interaction2: discord.Interaction):
+        selected_langs = select.values
+        channel_id = str(interaction.channel_id)
+
+        channel_settings[channel_id] = {
+            "langs": selected_langs,
+            "auto": channel_settings.get(channel_id, {}).get("auto", False)
+        }
+        save_settings()
+
+        flags = " ".join(flag_only[l] for l in selected_langs)
+        await interaction2.response.edit_message(content=f"✅ 翻訳先を {flags} に設定しました！", view=None)
+
+    select.callback = select_callback
+
+    view = discord.ui.View()
+    view.add_item(select)
+    await interaction.response.send_message("翻訳先の言語を選んでください👇", view=view)
 
 # ===============================
 # /auto コマンド（ON/OFF切替）
@@ -85,7 +97,7 @@ async def auto(interaction: discord.Interaction):
     channel_id = str(interaction.channel_id)
 
     if channel_id not in channel_settings:
-        channel_settings[channel_id] = {"lang": "en", "auto": False}
+        channel_settings[channel_id] = {"langs": ["en"], "auto": False}
 
     current = channel_settings[channel_id]["auto"]
     channel_settings[channel_id]["auto"] = not current
@@ -95,26 +107,61 @@ async def auto(interaction: discord.Interaction):
     await interaction.response.send_message(f"🌍 自動翻訳を {status} にしました！")
 
 # ===============================
-# メッセージ受信・翻訳処理
+# /help コマンド（使い方説明）
+# ===============================
+@tree.command(name="help", description="このBotの使い方を表示します")
+async def help_command(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="🌐 翻訳Bot 使い方ガイド",
+        description="このBotはチャンネルごとに自動翻訳を行います。",
+        color=0x00BFFF
+    )
+    embed.add_field(
+        name="🗣️ `/setlang`",
+        value="翻訳したい言語を **複数選択** できます。\n例：🇺🇸 English, 🇯🇵 Japanese, 🇪🇸 Spanish など",
+        inline=False
+    )
+    embed.add_field(
+        name="🌍 `/auto`",
+        value="自動翻訳を **オン／オフ** 切り替えます。\nオンにしたチャンネルの発言のみ翻訳されます。",
+        inline=False
+    )
+    embed.add_field(
+        name="💬 翻訳動作",
+        value="・自分の発言は翻訳されません。\n・他の人のメッセージが選択した言語に翻訳されます。\n・翻訳文には国旗が付きます（例：🇯🇵 こんにちは）",
+        inline=False
+    )
+    embed.add_field(
+        name="💾 設定保存",
+        value="各チャンネルごとの設定は自動で保存され、再起動後も保持されます。",
+        inline=False
+    )
+    embed.set_footer(text="開発: ChatGPT 翻訳Bot (Render対応版)")
+    await interaction.response.send_message(embed=embed)
+
+# ===============================
+# メッセージ受信 → 翻訳処理
 # ===============================
 @bot.event
 async def on_message(message):
     if message.author.bot:
-        return  # Botの発言は翻訳しない
+        return  # Bot自身や翻訳メッセージは無視
 
     channel_id = str(message.channel.id)
-    settings = channel_settings.get(channel_id, {"lang": "en", "auto": False})
+    settings = channel_settings.get(channel_id, {"langs": ["en"], "auto": False})
 
     if not settings["auto"]:
         return
 
-    lang = settings["lang"]
-    try:
-        translated = GoogleTranslator(source='auto', target=lang).translate(message.content)
-        if translated and translated != message.content:
-            await message.channel.send(f"{supported_languages[lang]} {translated}")
-    except Exception as e:
-        print(f"⚠️ 翻訳エラー: {e}")
+    langs = settings.get("langs", ["en"])
+
+    for lang in langs:
+        try:
+            translated = GoogleTranslator(source='auto', target=lang).translate(message.content)
+            if translated and translated != message.content:
+                await message.channel.send(f"{flag_only[lang]} {translated}")
+        except Exception as e:
+            print(f"⚠️ 翻訳エラー: {e}")
 
 # ===============================
 # 起動イベント
