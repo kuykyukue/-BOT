@@ -49,7 +49,9 @@ supported_langs = {
     "ja": "🇯🇵 Japanese",
     "ko": "🇰🇷 Korean",
     "vi": "🇻🇳 Vietnamese",
-    "es": "🇪🇸 Spanish"
+    "es": "🇪🇸 Spanish",
+    "zh-TW": "🇹🇼 Traditional Chinese (Taiwan)",
+    "zh-CN": "🇨🇳 Simplified Chinese (China)"
 }
 
 flags = {
@@ -57,7 +59,9 @@ flags = {
     "ja": "🇯🇵",
     "ko": "🇰🇷",
     "vi": "🇻🇳",
-    "es": "🇪🇸"
+    "es": "🇪🇸",
+    "zh-TW": "🇹🇼",
+    "zh-CN": "🇨🇳"
 }
 
 # 翻訳削除連動
