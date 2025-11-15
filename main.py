@@ -211,9 +211,7 @@ async def on_message(message):
             translated = GoogleTranslator(source="auto", target=lang).translate(message.content)
             if translated and translated != message.content:
                 sent = await message.channel.send(
-                    f"{flags.get(lang, lang)} {translated}",
-                    view=DeleteButton(message.id)
-                )
+                    f"{flags.get(lang, lang)} {translated}"
                 translated_msgs.append(sent.id)
         except Exception as e:
             print(f"翻訳エラー: {e}")
