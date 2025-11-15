@@ -68,7 +68,7 @@ flags = {
 translated_message_map = {}  # {元メッセージID: [翻訳メッセージID,...]}
 
 
-# ====== /autoコマンド（ON/OFF） ======
+# ====== /autoコマンド ======
 @bot.tree.command(name="auto", description="自動翻訳をON/OFFします")
 @app_commands.choices(
     mode=[
@@ -95,7 +95,7 @@ async def auto(interaction: discord.Interaction, mode: app_commands.Choice[str])
     )
 
 
-# ====== /setlang（複数選択式、国旗表示） ======
+# ====== /setlang（国旗付き・複数選択） ======
 class LangSelect(discord.ui.Select):
     def __init__(self, interaction):
         options = [
@@ -170,23 +170,7 @@ async def help(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-# ====== 翻訳メッセージに削除ボタン追加 ======
-class DeleteButton(discord.ui.View):
-    def __init__(self, target_msg_id):
-        super().__init__(timeout=None)
-        self.target_msg_id = target_msg_id
-
-    @discord.ui.button(label="🗑️ 削除", style=discord.ButtonStyle.danger)
-    async def delete_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            msg = await interaction.channel.fetch_message(interaction.message.id)
-            await msg.delete()
-        except:
-            pass
-        await interaction.response.send_message("🗑️ 削除しました。", ephemeral=True)
-
-
-# ====== メッセージ受信・翻訳 ======
+# ====== メッセージ受信・翻訳（削除ボタンなし） ======
 @bot.event
 async def on_message(message):
     if message.author.bot:
@@ -201,7 +185,6 @@ async def on_message(message):
     if not ch_settings["auto"]:
         return
 
-    # Bot自身の発言は翻訳しない
     if message.author == bot.user:
         return
 
@@ -212,6 +195,7 @@ async def on_message(message):
             if translated and translated != message.content:
                 sent = await message.channel.send(
                     f"{flags.get(lang, lang)} {translated}"
+                )
                 translated_msgs.append(sent.id)
         except Exception as e:
             print(f"翻訳エラー: {e}")
