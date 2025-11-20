@@ -1,5 +1,6 @@
 import os
 import json
+import asyncio
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -7,7 +8,9 @@ from deep_translator import GoogleTranslator
 from flask import Flask
 from threading import Thread
 
-# ====== Flask (Render Keep-Alive) ======
+# ===========================
+#   Flask（Render Keep-Alive）
+# ===========================
 app = Flask(__name__)
 
 @app.route('/')
@@ -19,13 +22,22 @@ def run_web():
 
 Thread(target=run_web, daemon=True).start()
 
-# ====== Discord Bot設定 ======
+# ===========================
+#   Discord Bot 設定
+# ===========================
 intents = discord.Intents.default()
 intents.messages = True
 intents.message_content = True
-bot = commands.Bot(command_prefix="/", intents=intents)
 
-# ====== 永続設定ファイル ======
+bot = commands.Bot(
+    command_prefix="/",
+    intents=intents,
+    reconnect=True   # ←自動再接続有効
+)
+
+# ===========================
+#   永続設定ファイル
+# ===========================
 DATA_PATH = "data/settings.json"
 os.makedirs("data", exist_ok=True)
 
@@ -43,15 +55,17 @@ def save_settings(data):
 
 settings = load_settings()
 
-# ====== 翻訳サポート言語（国旗＋言語名） ======
+# ===========================
+#   翻訳サポート言語
+# ===========================
 supported_langs = {
     "en": "🇺🇸 English",
     "ja": "🇯🇵 Japanese",
     "ko": "🇰🇷 Korean",
     "vi": "🇻🇳 Vietnamese",
     "es": "🇪🇸 Spanish",
-    "zh-TW": "🇹🇼 Traditional Chinese (Taiwan)",
-    "zh-CN": "🇨🇳 Simplified Chinese (China)"
+    "zh-TW": "🇹🇼 Traditional Chinese",
+    "zh-CN": "🇨🇳 Simplified Chinese",
 }
 
 flags = {
@@ -61,14 +75,15 @@ flags = {
     "vi": "🇻🇳",
     "es": "🇪🇸",
     "zh-TW": "🇹🇼",
-    "zh-CN": "🇨🇳"
+    "zh-CN": "🇨🇳",
 }
 
 # 翻訳削除連動
-translated_message_map = {}  # {元メッセージID: [翻訳メッセージID,...]}
+translated_message_map = {}  # {元メッセージID:[翻訳メッセージID,…]}
 
-
-# ====== /autoコマンド ======
+# ===========================
+# /auto（翻訳ON/OFF）
+# ===========================
 @bot.tree.command(name="auto", description="自動翻訳をON/OFFします")
 @app_commands.choices(
     mode=[
@@ -79,9 +94,10 @@ translated_message_map = {}  # {元メッセージID: [翻訳メッセージID,.
 async def auto(interaction: discord.Interaction, mode: app_commands.Choice[str]):
     guild_id = str(interaction.guild_id)
     ch_id = str(interaction.channel_id)
+
     guild_settings = settings.get(guild_id, {})
     channels = guild_settings.get("channels", {})
-    ch_settings = channels.get(ch_id, {"auto": False, "langs": ["en", "ja"]})
+    ch_settings = channels.get(ch_id, {"auto": False, "langs": ["en"]})
 
     ch_settings["auto"] = (mode.value == "on")
     channels[ch_id] = ch_settings
@@ -90,12 +106,14 @@ async def auto(interaction: discord.Interaction, mode: app_commands.Choice[str])
     save_settings(settings)
 
     await interaction.response.send_message(
-        f"{'✅ 自動翻訳をONにしました。' if mode.value == 'on' else '🚫 自動翻訳をOFFにしました。'}",
+        "✅ 自動翻訳をONにしました。" if mode.value == "on"
+        else "🚫 自動翻訳をOFFにしました。",
         ephemeral=True
     )
 
-
-# ====== /setlang（国旗付き・複数選択） ======
+# ===========================
+# /setlang（複数選択式）
+# ===========================
 class LangSelect(discord.ui.Select):
     def __init__(self, interaction):
         options = [
@@ -116,7 +134,7 @@ class LangSelect(discord.ui.Select):
 
         guild_settings = settings.get(guild_id, {})
         channels = guild_settings.get("channels", {})
-        ch_settings = channels.get(ch_id, {"auto": False, "langs": ["en", "ja"]})
+        ch_settings = channels.get(ch_id, {"auto": False, "langs": ["en"]})
 
         ch_settings["langs"] = self.values
         channels[ch_id] = ch_settings
@@ -125,30 +143,39 @@ class LangSelect(discord.ui.Select):
         save_settings(settings)
 
         flags_display = " ".join(flags.get(l, l) for l in self.values)
-        await interaction.response.edit_message(content=f"✅ 翻訳言語を {flags_display} に設定しました。", view=None)
 
+        await interaction.response.edit_message(
+            content=f"✅ 翻訳言語を {flags_display} に設定しました。",
+            view=None
+        )
 
 class LangView(discord.ui.View):
     def __init__(self, interaction):
-        super().__init__(timeout=60)
+        super().__init__(timeout=120)
         self.add_item(LangSelect(interaction))
 
-
-@bot.tree.command(name="setlang", description="翻訳先言語を設定（複数選択）")
+@bot.tree.command(name="setlang", description="翻訳先言語を複数選択で設定")
 async def setlang(interaction: discord.Interaction):
-    await interaction.response.send_message("🌐 翻訳先言語を選択してください：", view=LangView(interaction), ephemeral=True)
+    await interaction.response.send_message(
+        "🌐 翻訳先言語を選択してください：",
+        view=LangView(interaction),
+        ephemeral=True
+    )
 
-
-# ====== /status ======
+# ===========================
+# /status
+# ===========================
 @bot.tree.command(name="status", description="現在の設定を表示します")
 async def status(interaction: discord.Interaction):
     guild_id = str(interaction.guild_id)
     ch_id = str(interaction.channel_id)
 
     guild_settings = settings.get(guild_id, {})
-    ch_settings = guild_settings.get("channels", {}).get(ch_id, {"auto": False, "langs": ["en", "ja"]})
-    langs_display = " ".join(flags.get(l, l) for l in ch_settings["langs"])
-    auto_status = "✅ ON" if ch_settings["auto"] else "🚫 OFF"
+    ch_settings = guild_settings.get("channels", {}).get(ch_id, {})
+
+    auto_status = "✅ ON" if ch_settings.get("auto") else "🚫 OFF"
+    langs = ch_settings.get("langs", ["en"])
+    langs_display = " ".join(flags.get(l, l) for l in langs)
 
     embed = discord.Embed(title="🌐 翻訳BOT ステータス", color=0x00a2ff)
     embed.add_field(name="自動翻訳", value=auto_status, inline=False)
@@ -157,20 +184,22 @@ async def status(interaction: discord.Interaction):
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-
-# ====== /help ======
+# ===========================
+# /help
+# ===========================
 @bot.tree.command(name="help", description="使い方を表示します")
-async def help(interaction: discord.Interaction):
+async def help_cmd(interaction: discord.Interaction):
     embed = discord.Embed(title="📝 翻訳BOT コマンド一覧", color=0x58b9ff)
-    embed.add_field(name="/auto", value="自動翻訳のON/OFFを切り替えます（選択式）", inline=False)
-    embed.add_field(name="/setlang", value="翻訳先の言語を複数選択します（国旗付きリスト）", inline=False)
-    embed.add_field(name="/status", value="現在のチャンネル設定を確認します", inline=False)
-    embed.add_field(name="/help", value="このヘルプを表示します", inline=False)
-    embed.set_footer(text="開発：miku専用 翻訳BOT")
+    embed.add_field(name="/auto", value="翻訳のON/OFF（選択式）", inline=False)
+    embed.add_field(name="/setlang", value="翻訳先の言語を複数選択", inline=False)
+    embed.add_field(name="/status", value="現在の設定を確認", inline=False)
+    embed.add_field(name="/help", value="このヘルプを表示", inline=False)
+    embed.set_footer(text="開発：kuyBOT")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-
-# ====== メッセージ受信・翻訳（削除ボタンなし） ======
+# ===========================
+# メッセージ受信 → 翻訳
+# ===========================
 @bot.event
 async def on_message(message):
     if message.author.bot:
@@ -178,51 +207,67 @@ async def on_message(message):
 
     guild_id = str(message.guild.id)
     ch_id = str(message.channel.id)
+
     guild_settings = settings.get(guild_id, {})
-    channels = guild_settings.get("channels", {})
-    ch_settings = channels.get(ch_id, {"auto": False, "langs": ["en", "ja"]})
+    ch_settings = guild_settings.get("channels", {}).get(ch_id, {})
 
-    if not ch_settings["auto"]:
+    if not ch_settings.get("auto"):
         return
 
-    if message.author == bot.user:
-        return
+    translated_ids = []
 
-    translated_msgs = []
-    for lang in ch_settings["langs"]:
+    for lang in ch_settings.get("langs", ["en"]):
         try:
-            translated = GoogleTranslator(source="auto", target=lang).translate(message.content)
-            if translated and translated != message.content:
-                sent = await message.channel.send(
-                    f"{flags.get(lang, lang)} {translated}"
-                )
-                translated_msgs.append(sent.id)
+            t = GoogleTranslator(source="auto", target=lang).translate(message.content)
+            if t and t != message.content:
+                sent = await message.channel.send(f"{flags.get(lang, lang)} {t}")
+                translated_ids.append(sent.id)
         except Exception as e:
-            print(f"翻訳エラー: {e}")
+            print("翻訳エラー:", e)
 
-    if translated_msgs:
-        translated_message_map[message.id] = translated_msgs
+    if translated_ids:
+        translated_message_map[message.id] = translated_ids
 
-
-# ====== 元メッセージ削除で翻訳も削除 ======
+# ===========================
+# 元メッセージ削除 → 翻訳も削除
+# ===========================
 @bot.event
 async def on_message_delete(message):
     if message.id in translated_message_map:
-        for msg_id in translated_message_map[message.id]:
+        for tid in translated_message_map[message.id]:
             try:
-                msg = await message.channel.fetch_message(msg_id)
+                msg = await message.channel.fetch_message(tid)
                 await msg.delete()
             except:
                 pass
         del translated_message_map[message.id]
 
+# ===========================
+# 自動再接続（最重要）
+# ===========================
+async def keep_alive_task():
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        try:
+            _ = bot.latency
+        except:
+            try:
+                await bot.login(os.environ["DISCORD_BOT_TOKEN"])
+                await bot.connect(reconnect=True)
+            except:
+                pass
+        await asyncio.sleep(30)
 
-# ====== 起動 ======
+# ===========================
+# on_ready
+# ===========================
 @bot.event
 async def on_ready():
+    bot.loop.create_task(keep_alive_task())
     await bot.tree.sync()
     print(f"✅ Logged in as {bot.user}")
 
-
-# ====== 実行 ======
+# ===========================
+# 実行
+# ===========================
 bot.run(os.environ["DISCORD_BOT_TOKEN"])
