@@ -5,8 +5,8 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from deep_translator import GoogleTranslator
-import aiohttp
 from flask import Flask
+import threading
 
 # ===========================
 # Flask（Render Keep-Alive）
@@ -16,10 +16,6 @@ app = Flask(__name__)
 @app.route("/")
 def home():
     return "Bot is running!"
-
-# Render は gunicorn が Flask を起動するため、
-# main.py では Flask を起動しない。
-# （start command で gunicorn を動かす）
 
 # ===========================
 # Discord Bot 設定
@@ -31,7 +27,7 @@ intents.message_content = True
 bot = commands.Bot(
     command_prefix="/",
     intents=intents,
-    reconnect=True  # 自動再接続
+    reconnect=True
 )
 
 # ===========================
@@ -84,7 +80,6 @@ translated_message_map = {}
 # 翻訳ヘルパー（非同期化）
 # ===========================
 async def async_translate(text, target):
-    """deep_translator をスレッドで実行（非同期化）"""
     return await asyncio.to_thread(
         GoogleTranslator(source="auto", target=target).translate,
         text
@@ -137,7 +132,7 @@ class LangSelect(discord.ui.Select):
         self.interaction = interaction
 
     async def callback(self, interaction: discord.Interaction):
-        guild_id = str(interaction.guild_id)
+        guild_id = str(interaction.guildguild_id)
         ch_id = str(interaction.channel_id)
 
         guild_settings = settings.get(guild_id, {})
@@ -199,7 +194,7 @@ async def status(interaction: discord.Interaction):
 async def help_cmd(interaction: discord.Interaction):
     embed = discord.Embed(title="📝 翻訳BOT コマンド一覧", color=0x58b9ff)
     embed.add_field(name="/auto", value="翻訳のON/OFF（選択式）", inline=False)
-    embed.add_field(name="/setlang", value="翻訳先の言語を複数選択", inline=False)
+    embed.add_field(name="/setlang", value="翻訳先言語を複数選択", inline=False)
     embed.add_field(name="/status", value="現在の設定を確認", inline=False)
     embed.add_field(name="/help", value="このヘルプを表示", inline=False)
     embed.set_footer(text="開発：kuyBOT")
@@ -260,6 +255,16 @@ async def on_ready():
     print(f"✅ Logged in as {bot.user}")
 
 # ===========================
-# 実行
+# Flask + Discord Bot 同時実行（Render 無料対応）
 # ===========================
-bot.run(os.environ["DISCORD_BOT_TOKEN"])
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
+
+if __name__ == "__main__":
+    # Flask をバックグラウンドで起動
+    thread = threading.Thread(target=run_flask)
+    thread.start()
+
+    # Discord Bot 起動（メイン）
+    bot.run(os.environ["DISCORD_BOT_TOKEN"])
