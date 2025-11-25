@@ -5,25 +5,24 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from deep_translator import GoogleTranslator
+import aiohttp
 from flask import Flask
-from threading import Thread
 
 # ===========================
-#   Flask（Render Keep-Alive）
+# Flask（Render Keep-Alive）
 # ===========================
 app = Flask(__name__)
 
-@app.route('/')
+@app.route("/")
 def home():
     return "Bot is running!"
 
-def run_web():
-    app.run(host="0.0.0.0", port=8080)
-
-Thread(target=run_web, daemon=True).start()
+# Render は gunicorn が Flask を起動するため、
+# main.py では Flask を起動しない。
+# （start command で gunicorn を動かす）
 
 # ===========================
-#   Discord Bot 設定
+# Discord Bot 設定
 # ===========================
 intents = discord.Intents.default()
 intents.messages = True
@@ -32,11 +31,11 @@ intents.message_content = True
 bot = commands.Bot(
     command_prefix="/",
     intents=intents,
-    reconnect=True   # ←自動再接続有効
+    reconnect=True  # 自動再接続
 )
 
 # ===========================
-#   永続設定ファイル
+# 永続設定
 # ===========================
 DATA_PATH = "data/settings.json"
 os.makedirs("data", exist_ok=True)
@@ -56,7 +55,7 @@ def save_settings(data):
 settings = load_settings()
 
 # ===========================
-#   翻訳サポート言語
+# 翻訳サポート言語
 # ===========================
 supported_langs = {
     "en": "🇺🇸 English",
@@ -78,8 +77,18 @@ flags = {
     "zh-CN": "🇨🇳",
 }
 
-# 翻訳削除連動
-translated_message_map = {}  # {元メッセージID:[翻訳メッセージID,…]}
+# 元→翻訳IDマップ
+translated_message_map = {}
+
+# ===========================
+# 翻訳ヘルパー（非同期化）
+# ===========================
+async def async_translate(text, target):
+    """deep_translator をスレッドで実行（非同期化）"""
+    return await asyncio.to_thread(
+        GoogleTranslator(source="auto", target=target).translate,
+        text
+    )
 
 # ===========================
 # /auto（翻訳ON/OFF）
@@ -106,13 +115,12 @@ async def auto(interaction: discord.Interaction, mode: app_commands.Choice[str])
     save_settings(settings)
 
     await interaction.response.send_message(
-        "✅ 自動翻訳をONにしました。" if mode.value == "on"
-        else "🚫 自動翻訳をOFFにしました。",
+        "✅ 自動翻訳をONにしました。" if mode.value == "on" else "🚫 自動翻訳をOFFにしました。",
         ephemeral=True
     )
 
 # ===========================
-# /setlang（複数選択式）
+# /setlang
 # ===========================
 class LangSelect(discord.ui.Select):
     def __init__(self, interaction):
@@ -195,6 +203,7 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="/status", value="現在の設定を確認", inline=False)
     embed.add_field(name="/help", value="このヘルプを表示", inline=False)
     embed.set_footer(text="開発：kuyBOT")
+
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # ===========================
@@ -218,7 +227,7 @@ async def on_message(message):
 
     for lang in ch_settings.get("langs", ["en"]):
         try:
-            t = GoogleTranslator(source="auto", target=lang).translate(message.content)
+            t = await async_translate(message.content, lang)
             if t and t != message.content:
                 sent = await message.channel.send(f"{flags.get(lang, lang)} {t}")
                 translated_ids.append(sent.id)
@@ -243,27 +252,10 @@ async def on_message_delete(message):
         del translated_message_map[message.id]
 
 # ===========================
-# 自動再接続（最重要）
-# ===========================
-async def keep_alive_task():
-    await bot.wait_until_ready()
-    while not bot.is_closed():
-        try:
-            _ = bot.latency
-        except:
-            try:
-                await bot.login(os.environ["DISCORD_BOT_TOKEN"])
-                await bot.connect(reconnect=True)
-            except:
-                pass
-        await asyncio.sleep(30)
-
-# ===========================
 # on_ready
 # ===========================
 @bot.event
 async def on_ready():
-    bot.loop.create_task(keep_alive_task())
     await bot.tree.sync()
     print(f"✅ Logged in as {bot.user}")
 
