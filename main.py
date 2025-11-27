@@ -256,14 +256,35 @@ async def on_raw_reaction_add(payload):
     if message.author.bot:
         return
 
-    text = message.content
-    if not text:
+    parts = []
+
+    # 通常テキスト
+    if message.content:
+        parts.append(message.content)
+
+    # Embedがある場合は各部を追加
+    for embed in message.embeds:
+        if embed.title:
+            parts.append(embed.title)
+        if embed.description:
+            parts.append(embed.description)
+        for field in embed.fields:
+            if field.name:
+                parts.append(field.name)
+            if field.value:
+                parts.append(field.value)
+
+    if not parts:
         return
 
+    original_text = "\n".join(parts)
+
     try:
-        translated = await async_translate(text, lang)
+        translated = await async_translate(original_text, lang)
         if translated:
-            await channel.send(f"{emoji} {translated}")
+            embed = discord.Embed(title=f"翻訳結果 ({emoji})", description=translated, color=0x1abc9c)
+            embed.set_footer(text=f"元メッセージID: {message.id}")
+            await channel.send(embed=embed)
     except Exception as e:
         print("国旗翻訳エラー:", e)
 
