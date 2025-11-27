@@ -132,19 +132,21 @@ class LangSelect(discord.ui.Select):
         self.interaction = interaction
 
     async def callback(self, interaction: discord.Interaction):
-        guild_id = str(interaction.guildguild_id)
+        guild_id = str(interaction.guild_id)  # ← 修正
         ch_id = str(interaction.channel_id)
 
         guild_settings = settings.get(guild_id, {})
         channels = guild_settings.get("channels", {})
         ch_settings = channels.get(ch_id, {"auto": False, "langs": ["en"]})
 
+        # 選択された言語を保存
         ch_settings["langs"] = self.values
         channels[ch_id] = ch_settings
         guild_settings["channels"] = channels
         settings[guild_id] = guild_settings
         save_settings(settings)
 
+        # 国旗表示
         flags_display = " ".join(flags.get(l, l) for l in self.values)
 
         await interaction.response.edit_message(
