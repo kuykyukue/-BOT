@@ -5,7 +5,7 @@ from discord.ext import commands
 from discord import app_commands
 from flask import Flask
 from threading import Thread
-from googletrans_new import google_translator
+from deep_translator import GoogleTranslator
 
 # -----------------------
 # Flask KeepAlive for Render / UptimeRobot
@@ -33,15 +33,10 @@ intents.guilds = True
 intents.reactions = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
-translator = google_translator()
 
 # -----------------------
 # チャンネルごとの設定
 # -----------------------
-# 設定内容：
-#   auto_translate: 自動翻訳 有効/無効
-#   auto_lang: 自動翻訳先言語
-#   forward_copy: 引用/転送メッセージも翻訳
 channel_settings = {}
 
 default_settings = {
@@ -56,36 +51,31 @@ def get_ch_settings(channel_id):
     return channel_settings[channel_id]
 
 # -----------------------
-# ユーティリティ：翻訳
+# 翻訳関数（deep-translator）
 # -----------------------
-async def translate_text(text: str, src="auto", dest="en"):
+async def translate_text(text: str, dest="en"):
     try:
-        result = translator.translate(text, lang_src=src, lang_tgt=dest)
-        return result
+        translation = GoogleTranslator(source='auto', target=dest).translate(text)
+        return translation
     except Exception as e:
         print("Translation error:", e)
         return None
 
 # -----------------------
-# /set_auto コマンド（自動翻訳設定）
+# /set_auto
 # -----------------------
-@bot.tree.command(name="set_auto", description="このチャンネルの自動翻訳を設定します")
-@app_commands.describe(
-    enable="True = 自動翻訳をオン / False = オフ",
-    lang="翻訳言語（例：ja, en, zh-cn, ko, fr など）"
-)
+@bot.tree.command(name="set_auto", description="自動翻訳を ON/OFF します")
 async def set_auto(interaction: discord.Interaction, enable: bool, lang: str):
     ch = get_ch_settings(interaction.channel_id)
     ch["auto_translate"] = enable
     ch["auto_lang"] = lang
 
-    status = "オン" if enable else "オフ"
     await interaction.response.send_message(
-        f"✅ 自動翻訳を **{status}** に設定しました\n翻訳先： **{lang}**"
+        f"✅ 自動翻訳: **{'ON' if enable else 'OFF'}**\n翻訳言語: **{lang}**"
     )
 
 # -----------------------
-# /set_forward コマンド（引用/転送翻訳 ON/OFF）
+# /set_forward
 # -----------------------
 @bot.tree.command(name="set_forward", description="引用/転送メッセージの翻訳 ON/OFF")
 async def set_forward(interaction: discord.Interaction, enable: bool):
@@ -93,11 +83,11 @@ async def set_forward(interaction: discord.Interaction, enable: bool):
     ch["forward_copy"] = enable
 
     await interaction.response.send_message(
-        f"🔁 引用/転送翻訳を **{'ON' if enable else 'OFF'}** にしました"
+        f"🔁 引用/転送メッセージ翻訳: **{'ON' if enable else 'OFF'}**"
     )
 
 # -----------------------
-# 通常メッセージ受信 → 自動翻訳（任意）
+# on_message （自動翻訳 & 強制翻訳）
 # -----------------------
 @bot.event
 async def on_message(message: discord.Message):
@@ -106,19 +96,18 @@ async def on_message(message: discord.Message):
 
     ch = get_ch_settings(message.channel.id)
 
-    # --- 1. 強制翻訳 !ja, !en, !zh-cn など ---
+    # 強制翻訳 (!ja こんにちは)
     if message.content.startswith("!"):
         parts = message.content.split(" ", 1)
         if len(parts) == 2:
-            cmd = parts[0][1:]
+            lang = parts[0][1:]
             txt = parts[1]
-
-            translated = await translate_text(txt, dest=cmd)
+            translated = await translate_text(txt, dest=lang)
             if translated:
-                await message.channel.send(f"**[{cmd}]** {translated}")
+                await message.channel.send(f"**[{lang}]** {translated}")
         return
 
-    # --- 2. システム自動翻訳 ---
+    # 自動翻訳
     if ch["auto_translate"]:
         translated = await translate_text(message.content, dest=ch["auto_lang"])
         if translated:
@@ -129,21 +118,19 @@ async def on_message(message: discord.Message):
 # -----------------------
 # リアクション翻訳の管理
 # -----------------------
-# 保存形式：
-# reaction_map[original_message_id][emoji] = translated_message_id
 reaction_map = {}
 
 emoji_lang = {
     "🇯🇵": "ja",
     "🇺🇸": "en",
-    "🇨🇳": "zh-cn",
-    "🇹🇼": "zh-tw",
+    "🇨🇳": "zh-CN",
+    "🇹🇼": "zh-TW",
     "🇰🇷": "ko",
     "🇫🇷": "fr",
 }
 
 # -----------------------
-# リアクション追加 → 翻訳メッセージ生成
+# on_reaction_add
 # -----------------------
 @bot.event
 async def on_reaction_add(reaction, user):
@@ -157,34 +144,30 @@ async def on_reaction_add(reaction, user):
     lang = emoji_lang[emoji]
     message = reaction.message
 
-    # すでに翻訳済み
+    # 多重翻訳防止
     if message.id in reaction_map and emoji in reaction_map[message.id]:
         return
 
-    # 翻訳本文
-    content = message.content
-    if not content:
-        return
-
-    translated = await translate_text(content, dest=lang)
+    translated = await translate_text(message.content, dest=lang)
     if not translated:
         return
 
-    # --- 引用メッセージにも対応 ---
-    ref_txt = ""
+    # 引用メッセージも翻訳
+    ref_text = ""
     if message.reference and message.reference.resolved:
-        ref_msg = message.reference.resolved
-        ref_txt = f"\n> **引用:** {ref_msg.content}"
+        ref_text = f"\n> 引用: {message.reference.resolved.content}"
 
-    sent = await message.channel.send(f"🔁 **{emoji} 翻訳**:\n{translated}{ref_txt}")
+    sent = await message.channel.send(
+        f"🔁 **{emoji} 翻訳**:\n{translated}{ref_text}"
+    )
 
-    # 保存
+    # 記録
     if message.id not in reaction_map:
         reaction_map[message.id] = {}
     reaction_map[message.id][emoji] = sent.id
 
 # -----------------------
-# リアクション削除 → 翻訳メッセージも削除
+# on_reaction_remove（削除連動）
 # -----------------------
 @bot.event
 async def on_reaction_remove(reaction, user):
@@ -211,20 +194,17 @@ async def on_reaction_remove(reaction, user):
         pass
 
     del reaction_map[message.id][emoji]
-    if len(reaction_map[message.id]) == 0:
+    if not reaction_map[message.id]:
         del reaction_map[message.id]
 
 # -----------------------
-# Bot Ready
+# Ready
 # -----------------------
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
-    try:
-        synced = await bot.tree.sync()
-        print(f"Slash commands synced: {len(synced)}")
-    except Exception as e:
-        print("Sync error:", e)
+    await bot.tree.sync()
+    print("Slash Commands Synced")
 
 # -----------------------
 # RUN
