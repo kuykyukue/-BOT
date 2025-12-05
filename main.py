@@ -1,168 +1,150 @@
-# main.py
-# -*- coding: utf-8 -*-
 import os
-import sys
-import json
-import re
 import asyncio
-import threading
-from typing import List, Optional, Tuple, Dict
-
-import aiohttp
 import discord
-from discord.ext import commands, tasks
-from deep_translator import GoogleTranslator
+from discord.ext import commands
+from discord import app_commands
 from flask import Flask
+from threading import Thread
+from googletrans_new import google_translator
 
-# -----------------------------
-# Configuration
-# -----------------------------
-SETTINGS_FILE = "data/settings.json"
-TRANSLATOR_FOOTER_MARK = "Translator-BOT"
-KEEPALIVE_TARGET = os.environ.get("KEEPALIVE_URL")  # optional, fallback to render url if set
-DEFAULT_PORT = int(os.environ.get("PORT", 10000))
-DISCORD_TOKEN_ENV = "DISCORD_BOT_TOKEN"
-
-# -----------------------------
-# Ensure data folder & load settings
-# -----------------------------
-os.makedirs("data", exist_ok=True)
-
-def safe_load_settings(path: str) -> dict:
-    try:
-        if not os.path.exists(path):
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump({}, f, ensure_ascii=False, indent=4)
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f) or {}
-    except Exception as e:
-        print(f"[settings] load error: {e}")
-        return {}
-
-def safe_save_settings(path: str, data: dict):
-    try:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=4)
-    except Exception as e:
-        print(f"[settings] save error: {e}")
-
-settings = safe_load_settings(SETTINGS_FILE)
-
-# -----------------------------
-# Flask keep-alive (Render用)
-# -----------------------------
+# -----------------------
+# Flask KeepAlive for Render / UptimeRobot
+# -----------------------
 app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "✅ Discord翻訳BOT is alive!"
+    return "BOT RUNNING OK", 200
 
-def run_flask(port: int = DEFAULT_PORT):
-    app.run(host="0.0.0.0", port=port)
+def run_flask():
+    app.run(host="0.0.0.0", port=10000)
 
-flask_thread = threading.Thread(target=run_flask, daemon=True)
-flask_thread.start()
+Thread(target=run_flask).start()
 
-# -----------------------------
+# -----------------------
 # Discord BOT 設定
-# -----------------------------
+# -----------------------
+DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+
 intents = discord.Intents.default()
+intents.messages = True
 intents.message_content = True
-intents.reactions = True
 intents.guilds = True
-intents.members = False
+intents.reactions = True
 
-bot = commands.Bot(command_prefix="/", intents=intents, reconnect=True)
+bot = commands.Bot(command_prefix="!", intents=intents)
+translator = google_translator()
 
-# original_message_id + lang → translated message list
-translated_messages: Dict[Tuple[int, str], List[int]] = {}
+# -----------------------
+# チャンネルごとの設定
+# -----------------------
+# 設定内容：
+#   auto_translate: 自動翻訳 有効/無効
+#   auto_lang: 自動翻訳先言語
+#   forward_copy: 引用/転送メッセージも翻訳
+channel_settings = {}
 
-# -----------------------------
-# Flag → Language mapping
-# -----------------------------
-LANG_TO_EMOJI = {
-    "en": "🇺🇸", "ja": "🇯🇵", "ko": "🇰🇷", "zh": "🇨🇳",
-    "zh-CN": "🇨🇳", "zh-TW": "🇹🇼", "fr": "🇫🇷", "de": "🇩🇪",
-    "es": "🇪🇸", "it": "🇮🇹", "ru": "🇷🇺", "pt": "🇧🇷",
-    "id": "🇮🇩", "vi": "🇻🇳", "th": "🇹🇭"
+default_settings = {
+    "auto_translate": False,
+    "auto_lang": "en",
+    "forward_copy": True,
 }
 
-EMOJI_TO_LANG = {v: k for k, v in LANG_TO_EMOJI.items()}
+def get_ch_settings(channel_id):
+    if channel_id not in channel_settings:
+        channel_settings[channel_id] = default_settings.copy()
+    return channel_settings[channel_id]
 
-# -----------------------------
-# Emoji 正規化
-# -----------------------------
-def emoji_to_lang_from_partial_name(name: str) -> Optional[str]:
-    m = re.search(r"flag[_\-]?([a-z]{2})", name, flags=re.I)
-    if m:
-        cc = m.group(1).lower()
-        mapping = {
-            "jp": "ja", "us": "en", "gb": "en", "kr": "ko",
-            "cn": "zh-CN", "tw": "zh-TW", "fr": "fr", "de": "de",
-            "es": "es", "it": "it", "ru": "ru", "br": "pt",
-            "id": "id", "vn": "vi", "th": "th"
-        }
-        return mapping.get(cc)
-    if len(name) == 2 and name.isalpha():
-        mapping = {"ja": "ja", "jp": "ja", "en": "en", "ko": "ko", "cn": "zh-CN", "tw": "zh-TW"}
-        return mapping.get(name.lower())
-    return None
-
-def unicode_flag_to_lang(flag_str: str) -> Optional[str]:
+# -----------------------
+# ユーティリティ：翻訳
+# -----------------------
+async def translate_text(text: str, src="auto", dest="en"):
     try:
-        if len(flag_str) < 2:
-            return None
-        cp = [ord(ch) for ch in flag_str]
-        if all(0x1F1E6 <= x <= 0x1F1FF for x in cp[:2]):
-            cc = ''.join(chr(x - 0x1F1E6 + ord('a')) for x in cp[:2])
-            return emoji_to_lang_from_partial_name(f"flag_{cc}")
-    except:
-        pass
-    return None
+        result = translator.translate(text, lang_src=src, lang_tgt=dest)
+        return result
+    except Exception as e:
+        print("Translation error:", e)
+        return None
 
-def normalize_emoji(payload_emoji) -> Optional[str]:
-    try:
-        # PartialEmoji
-        if hasattr(payload_emoji, "name") and payload_emoji.name:
-            lang = emoji_to_lang_from_partial_name(payload_emoji.name)
-            if lang:
-                return lang
+# -----------------------
+# /set_auto コマンド（自動翻訳設定）
+# -----------------------
+@bot.tree.command(name="set_auto", description="このチャンネルの自動翻訳を設定します")
+@app_commands.describe(
+    enable="True = 自動翻訳をオン / False = オフ",
+    lang="翻訳言語（例：ja, en, zh-cn, ko, fr など）"
+)
+async def set_auto(interaction: discord.Interaction, enable: bool, lang: str):
+    ch = get_ch_settings(interaction.channel_id)
+    ch["auto_translate"] = enable
+    ch["auto_lang"] = lang
 
-        # unicode emoji
-        s = str(payload_emoji)
-        lang = unicode_flag_to_lang(s)
-        if lang:
-            return lang
+    status = "オン" if enable else "オフ"
+    await interaction.response.send_message(
+        f"✅ 自動翻訳を **{status}** に設定しました\n翻訳先： **{lang}**"
+    )
 
-        # fallback
-        if s in EMOJI_TO_LANG:
-            return EMOJI_TO_LANG[s]
-    except:
-        pass
-    return None
-    # --- Reaction Translation Helpers ---
+# -----------------------
+# /set_forward コマンド（引用/転送翻訳 ON/OFF）
+# -----------------------
+@bot.tree.command(name="set_forward", description="引用/転送メッセージの翻訳 ON/OFF")
+async def set_forward(interaction: discord.Interaction, enable: bool):
+    ch = get_ch_settings(interaction.channel_id)
+    ch["forward_copy"] = enable
 
-# メモリ上に翻訳メッセージの関連を保存
-# { original_message_id: {emoji: translated_message_id} }
+    await interaction.response.send_message(
+        f"🔁 引用/転送翻訳を **{'ON' if enable else 'OFF'}** にしました"
+    )
+
+# -----------------------
+# 通常メッセージ受信 → 自動翻訳（任意）
+# -----------------------
+@bot.event
+async def on_message(message: discord.Message):
+    if message.author.bot:
+        return
+
+    ch = get_ch_settings(message.channel.id)
+
+    # --- 1. 強制翻訳 !ja, !en, !zh-cn など ---
+    if message.content.startswith("!"):
+        parts = message.content.split(" ", 1)
+        if len(parts) == 2:
+            cmd = parts[0][1:]
+            txt = parts[1]
+
+            translated = await translate_text(txt, dest=cmd)
+            if translated:
+                await message.channel.send(f"**[{cmd}]** {translated}")
+        return
+
+    # --- 2. システム自動翻訳 ---
+    if ch["auto_translate"]:
+        translated = await translate_text(message.content, dest=ch["auto_lang"])
+        if translated:
+            await message.channel.send(f"🌐 **Auto:** {translated}")
+
+    await bot.process_commands(message)
+
+# -----------------------
+# リアクション翻訳の管理
+# -----------------------
+# 保存形式：
+# reaction_map[original_message_id][emoji] = translated_message_id
 reaction_map = {}
 
-
-async def translate_text(text: str, src: str, dest: str):
-    try:
-        result = await translator.translate(text, src=src, dest=dest)
-        return result.text
-    except Exception as e:
-        print(f"[Error] Translation failed: {e}")
-        return None
-# 絵文字 → 言語マッピング
 emoji_lang = {
     "🇯🇵": "ja",
     "🇺🇸": "en",
     "🇨🇳": "zh-cn",
     "🇹🇼": "zh-tw",
     "🇰🇷": "ko",
-    "🇫🇷": "fr"
+    "🇫🇷": "fr",
 }
+
+# -----------------------
+# リアクション追加 → 翻訳メッセージ生成
+# -----------------------
 @bot.event
 async def on_reaction_add(reaction, user):
     if user.bot:
@@ -175,33 +157,36 @@ async def on_reaction_add(reaction, user):
     lang = emoji_lang[emoji]
     message = reaction.message
 
-    # 既に翻訳済みなら何もしない
+    # すでに翻訳済み
     if message.id in reaction_map and emoji in reaction_map[message.id]:
         return
 
-    # メッセージ本文を取得
+    # 翻訳本文
     content = message.content
     if not content:
         return
 
-    translated = await translate_text(content, "auto", lang)
+    translated = await translate_text(content, dest=lang)
     if not translated:
         return
 
-    # 転送メッセージ / 引用メッセージも翻訳
-    ref_text = ""
+    # --- 引用メッセージにも対応 ---
+    ref_txt = ""
     if message.reference and message.reference.resolved:
-        ref_src = message.reference.resolved
-        ref_text = f"\n> **引用:** {ref_src.content}"
+        ref_msg = message.reference.resolved
+        ref_txt = f"\n> **引用:** {ref_msg.content}"
 
-    sent = await message.channel.send(f"**🔁 {emoji} 翻訳:**\n{translated}{ref_text}")
+    sent = await message.channel.send(f"🔁 **{emoji} 翻訳**:\n{translated}{ref_txt}")
 
     # 保存
     if message.id not in reaction_map:
         reaction_map[message.id] = {}
-
     reaction_map[message.id][emoji] = sent.id
-    @bot.event
+
+# -----------------------
+# リアクション削除 → 翻訳メッセージも削除
+# -----------------------
+@bot.event
 async def on_reaction_remove(reaction, user):
     if user.bot:
         return
@@ -212,25 +197,36 @@ async def on_reaction_remove(reaction, user):
 
     message = reaction.message
 
-    # 登録されていないなら終了
     if message.id not in reaction_map:
         return
     if emoji not in reaction_map[message.id]:
         return
 
-    translated_msg_id = reaction_map[message.id][emoji]
+    msg_id = reaction_map[message.id][emoji]
 
-    # 削除を試みる
     try:
-        translated_msg = await message.channel.fetch_message(translated_msg_id)
-        await translated_msg.delete()
+        target = await message.channel.fetch_message(msg_id)
+        await target.delete()
     except:
         pass
 
-    # マップから消す
     del reaction_map[message.id][emoji]
-
-    # もし全部消えたらエントリ削除
     if len(reaction_map[message.id]) == 0:
         del reaction_map[message.id]
-        bot.run(DISCORD_BOT_TOKEN)
+
+# -----------------------
+# Bot Ready
+# -----------------------
+@bot.event
+async def on_ready():
+    print(f"Logged in as {bot.user}")
+    try:
+        synced = await bot.tree.sync()
+        print(f"Slash commands synced: {len(synced)}")
+    except Exception as e:
+        print("Sync error:", e)
+
+# -----------------------
+# RUN
+# -----------------------
+bot.run(DISCORD_BOT_TOKEN)
