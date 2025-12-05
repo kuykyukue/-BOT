@@ -1,27 +1,47 @@
 import os
 import logging
+import threading
 from dotenv import load_dotenv
 
 import discord
 from discord.ext import commands
 from deep_translator import GoogleTranslator
 
-# ----------------------------
-#    設定読み込み & ログ設定
-# ----------------------------
+from flask import Flask
+
+# =============================
+# 1. Render用ダミーWebサーバー
+# =============================
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Translate Bot is running on Render!"
+
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
+
+# 別スレッドで Flask を起動
+threading.Thread(target=run_web).start()
+
+
+# =============================
+# 2. 設定読み込み & ログ設定
+# =============================
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("translate-bot")
 
-TOKEN = os.getenv("DISCORD_BOT_TOKEN")  # ← 固定！
+TOKEN = os.getenv("DISCORD_BOT_TOKEN")  # ← Render の ENV に設定する
 
 if not TOKEN:
     raise ValueError("環境変数 DISCORD_BOT_TOKEN が設定されていません。")
 
 
-# ----------------------------
-#    Discord Intents
-# ----------------------------
+# =============================
+# 3. Discord Intents
+# =============================
 intents = discord.Intents.default()
 intents.message_content = True
 intents.reactions = True
@@ -30,15 +50,10 @@ intents.messages = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 
-# ----------------------------
-#   Embed / 本文 抽出関数
-# ----------------------------
+# =============================
+# 4. Embed / 本文 抽出関数
+# =============================
 async def extract_text_from_message(message):
-    """
-    Discord 仕様変更対策版：
-    fetch_message で再取得し、Embed の内容まで可能な限り抽出する
-    """
-
     try:
         channel = message.channel
         message = await channel.fetch_message(message.id)
@@ -73,9 +88,9 @@ async def extract_text_from_message(message):
     return joined if joined else None
 
 
-# ----------------------------
-#           翻訳
-# ----------------------------
+# =============================
+# 5. 翻訳
+# =============================
 def translate_text(text, target_lang):
     try:
         return GoogleTranslator(source="auto", target=target_lang).translate(text)
@@ -83,15 +98,14 @@ def translate_text(text, target_lang):
         return f"翻訳エラー: {e}"
 
 
-# ----------------------------
-#   国旗リアクション → 翻訳
-# ----------------------------
+# =============================
+# 6. 国旗リアクション → 翻訳
+# =============================
 FLAG_TO_LANG = {
     "🇯🇵": "ja",
     "🇺🇸": "en",
     "🇬🇧": "en",
 }
-
 
 @bot.event
 async def on_raw_reaction_add(payload):
@@ -130,12 +144,11 @@ async def on_raw_reaction_add(payload):
     await channel.send(embed=embed)
 
 
-# ----------------------------
-#          起動
-# ----------------------------
+# =============================
+# 7. Bot 起動
+# =============================
 @bot.event
 async def on_ready():
     logger.info("Bot が online になりました！")
-
 
 bot.run(TOKEN)
